@@ -4,10 +4,20 @@ app/domains/commodities/clients/melligold.py
 UNVERIFIED — see clients/platform_base.py's module docstring.
 
 `melligold.com/api/v1/exchange/buy-sell-price/?symbol=XAU18&format=json`
-is the most explicitly-named endpoint of the six ("buy-sell-price"),
-which is a decent sign the response has literal `buy`/`sell` keys — but
-still unconfirmed. `symbol=XAU18` is passed through as given (18-karat
-gold spot symbol convention).
+returns buy/sell prices explicitly.
+Response format:
+{
+  "message": "Success",
+  "data": {
+    "price_buy": 18257891,
+    "price_sell": 18257891,
+    "difference_price_buy": 160,
+    "difference_price_sell": 160,
+    "lower_amounts": {...},
+    "system_balance_amount": 10000.0,
+    "timestamp": 1784204280
+  }
+}
 """
 from __future__ import annotations
 
@@ -15,7 +25,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.domains.commodities.clients.platform_base import GoldPricePlatformClient, find_number, require_parsed
+from app.domains.commodities.clients.platform_base import GoldPricePlatformClient
 from app.domains.commodities.exceptions import GoldPlatformUnavailableError
 from app.domains.commodities.schemas import RawGoldPlatformPrice
 
@@ -39,14 +49,29 @@ class MelliGoldClient(GoldPricePlatformClient):
         except httpx.HTTPError as e:
             raise GoldPlatformUnavailableError(f"{self.name}: request failed: {e}") from e
 
-        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        # Check message indicates success
+        if payload.get("message") != "Success":
+            raise GoldPlatformUnavailableError(
+                f"{self.name}: API returned non-success message: {payload.get('message')}"
+            )
 
-        buy = find_number(data, ("buy",), ("buyPrice",), ("buy_price",))
-        sell = find_number(data, ("sell",), ("sellPrice",), ("sell_price",))
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise GoldPlatformUnavailableError(
+                f"{self.name}: missing 'data' object in response: {payload}"
+            )
 
-        fields = require_parsed(self.name, payload, buy=buy, sell=sell)
+        price_buy = data.get("price_buy")
+        price_sell = data.get("price_sell")
+
+        if price_buy is None or price_sell is None:
+            raise GoldPlatformUnavailableError(
+                f"{self.name}: missing price_buy or price_sell in data: {data}"
+            )
 
         return RawGoldPlatformPrice(
-            platform=self.name, buy_price=fields["buy"], sell_price=fields["sell"],
+            platform=self.name,
+            buy_price=float(price_buy),
+            sell_price=float(price_sell),
             fetched_at=datetime.now(timezone.utc),
         )
