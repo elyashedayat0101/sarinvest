@@ -1,0 +1,40 @@
+# Optional — not required to use the Dockerfile directly (`docker build` +
+# `docker run` works fine on its own). This exists because the app has a
+# real Redis dependency (OTP storage, gold-platform-price cache) and
+# wiring that up by hand every time is exactly the kind of extra time
+# this was meant to avoid. Run with: `docker compose up --build`
+
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      LOTUS_REDIS_URL: redis://redis:6379/0
+      # All persistent data lives under /app/data (volume below) instead
+      # of the default bare relative paths — mounting a volume directly
+      # at /app would otherwise shadow the app/legacy code baked into
+      # the image at build time.
+      LOTUS_LOTUS_DB_URL: sqlite+aiosqlite:///data/lotus_options.db
+      LOTUS_PORTFOLIO_DB_URL: sqlite+aiosqlite:///data/lotus_portfolio.db
+      LOTUS_SHARED_DB_URL: sqlite+aiosqlite:///data/app_shared.db
+      LOTUS_AVATAR_UPLOAD_DIR: data/uploads/avatars
+      # Add the rest of your real settings here, or use env_file: .env
+      # instead (don't commit that file — see .dockerignore).
+    env_file:
+      - .env
+    volumes:
+      - lotus-data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  lotus-data:
+  redis-data:

@@ -1,0 +1,44 @@
+[project]
+name = "lotus-options-monitor"
+version = "2.0.0"
+description = "Multi-fund options monitor & strategy builder — FastAPI edition"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-multipart>=0.0.12",  # form parsing, harmless to include even if unused today
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "jdatetime>=5.0",  # optional for app/domain/jalali.py — falls back to a pure-Python algorithm if absent
+    "httpx>=0.27",  # exchange API clients (app/domains/crypto/clients/*.py)
+    "pyjwt>=2.9",  # access/refresh tokens (app/domains/users/security.py)
+    "redis>=5.0",  # OTP storage (app/domains/users/otp_store.py) — optional at runtime, falls back to in-memory if LOTUS_REDIS_URL unset
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
