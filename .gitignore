@@ -9,3 +9,5 @@ venv/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+app_shared.db-wal
+.idea/
