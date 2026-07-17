@@ -6,6 +6,13 @@ partial failure, cache, persist. `get_today_changes` doesn't re-fetch —
 it reuses whatever `get_all` most recently cached/returned, since "today's
 change" is just a different view (sorted by change_percent) over the
 same data, not a separate data source.
+
+`change_percent_month`/`change_percent_year` are computed in
+clients/tsetmc.py (from TSETMC's real `GetClosingPriceDailyList` history
+endpoint) and arrive already set on `RawCommodityPrice` — this layer just
+passes them through via `_to_out`'s `model_dump`. Deliberately NOT
+persisted to `commodity_price_snapshots`/looked up from our own history:
+they're recomputed fresh from TSETMC on every fetch, no DB round trip.
 """
 from __future__ import annotations
 
@@ -75,7 +82,7 @@ class CommodityService:
         listing = await self.get_all(group, use_cache=True)
         items = [
             TodayChangeItemOut(
-                ins_code=i.ins_code, isin=i.isin, short_name=i.short_name,
+                ins_code=i.ins_code, isin=i.isin, short_name=i.short_name, symbol_fa=i.symbol_fa,
                 last_price=i.last_price, change_amount=i.change_amount,
                 change_percent=i.change_percent, volume=i.volume,
             )

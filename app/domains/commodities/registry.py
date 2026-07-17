@@ -65,8 +65,14 @@ GOLD_ETF_INSTRUMENTS: List[InstrumentRef] = [
     InstrumentRef(ins_code="53514992320442853", isin="IRTKROZG0001", group="gold"),  # NOTE: duplicate isin as above — kept as given, not deduplicated (see README_MIGRATION-style caveat in this domain's docs)
     InstrumentRef(ins_code="48968268685622891", isin="IRTKGOLD0001", group="gold"),
     InstrumentRef(ins_code="13117618204212939", isin="IRTKDAFI0001", group="gold"),
+    InstrumentRef(ins_code="18156575395080321", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="33761569293467411", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="8620139816622134", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="41483334879559487", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="47717365931256099", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="30714541738317499", isin="IRTKJAMF0001", group="silver"),
+    InstrumentRef(ins_code="47717365931256099", isin="IRTKJAMF0001", group="silver"),
 ]
-
 # Populate this the same way when you're ready — nothing else in this
 # domain needs to change. Router/service/repository all take `group` as
 # a parameter already.

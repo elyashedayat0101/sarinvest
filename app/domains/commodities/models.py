@@ -32,10 +32,11 @@ class CommodityPriceSnapshot(SharedBase):
     isin: Mapped[str]
     group: Mapped[str]  # "gold" | "silver" | ... — see registry.py::CommodityGroup
     short_name: Mapped[Optional[str]]
+    symbol_fa: Mapped[Optional[str]]  # lVal18AFC — Farsi ticker symbol
     full_name: Mapped[Optional[str]]
 
     last_price: Mapped[Optional[float]]       # pDrCotVal — last traded price
-    closing_price: Mapped[Optional[float]]    # pClosing — volume-weighted average / official close
+    closing_price: Mapped[Optional[float]]  # pClosing — official/final price ("قیمت پایانی")
     previous_close: Mapped[Optional[float]]   # priceYesterday
     open_price: Mapped[Optional[float]]       # priceFirst
     day_low: Mapped[Optional[float]]          # priceMin
@@ -46,14 +47,22 @@ class CommodityPriceSnapshot(SharedBase):
     volume: Mapped[Optional[float]]           # qTotTran5J
     value: Mapped[Optional[float]]            # qTotCap (rial)
     trade_count: Mapped[Optional[float]]      # zTotTran
+    avg_volume_5d: Mapped[Optional[float]]  # qTotTran5JAvg — average volume, last 5 sessions
 
-    nav: Mapped[Optional[float]]              # InstrumentInfo.nav
+    nav: Mapped[Optional[
+        float]]  # computed: midpoint of redemption_price/subscription_price (see clients/tsetmc.py) — NOT the raw InstrumentInfo.nav field, which TSETMC never populates
     week_low: Mapped[Optional[float]]         # minWeek
     week_high: Mapped[Optional[float]]        # maxWeek
     year_low: Mapped[Optional[float]]         # minYear
     year_high: Mapped[Optional[float]]        # maxYear
+    units_issued: Mapped[Optional[float]]  # etfIssuedUnit — total fund units outstanding
+
+    trading_status: Mapped[Optional[str]]  # instrumentState.cEtavalTitle, e.g. "مجاز"
+    price_band_min: Mapped[Optional[float]]  # staticThreshold.psGelStaMin — today's allowed floor
+    price_band_max: Mapped[Optional[float]]  # staticThreshold.psGelStaMax — today's allowed ceiling
 
     redemption_price: Mapped[Optional[float]]   # ETF.pRedTran — NAV for selling back to the fund
     subscription_price: Mapped[Optional[float]]  # ETF.pSubTran — NAV for buying from the fund
 
-    fetched_at: Mapped[str]
+    fetched_at: Mapped[
+        str]  # ISO 8601. NOTE: change_percent_month/year are NOT columns here — computed live from TSETMC on every fetch, never persisted; see clients/tsetmc.py and service.py

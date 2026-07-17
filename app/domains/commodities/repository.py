@@ -29,16 +29,23 @@ class CommodityRepository:
                 for p in prices:
                     session.add(CommodityPriceSnapshot(
                         ins_code=p.ins_code, isin=p.isin, group=p.group,
-                        short_name=p.short_name, full_name=p.full_name,
+                        short_name=p.short_name, symbol_fa=p.symbol_fa, full_name=p.full_name,
                         last_price=p.last_price, closing_price=p.closing_price,
                         previous_close=p.previous_close, open_price=p.open_price,
                         day_low=p.day_low, day_high=p.day_high,
                         change_amount=p.change_amount, change_percent=p.change_percent,
                         volume=p.volume, value=p.value, trade_count=p.trade_count,
+                        avg_volume_5d=p.avg_volume_5d,
                         nav=p.nav, week_low=p.week_low, week_high=p.week_high,
                         year_low=p.year_low, year_high=p.year_high,
+                        units_issued=p.units_issued,
+                        trading_status=p.trading_status,
+                        price_band_min=p.price_band_min, price_band_max=p.price_band_max,
                         redemption_price=p.redemption_price, subscription_price=p.subscription_price,
                         fetched_at=p.fetched_at.isoformat(),
+                        # NOTE: change_percent_month/year are intentionally NOT persisted here —
+                        # they're computed live from TSETMC on every fetch (see clients/tsetmc.py),
+                        # not derived from this table. See service.py's module docstring.
                     ))
 
     async def get_latest_per_instrument(self, group: str) -> List[dict]:

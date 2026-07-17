@@ -12,12 +12,22 @@ response shapes from — see the field-provenance comments in `schemas.py`.
 
 Two fetch strategies, both implemented, for different confidence levels:
 
-1. `fetch_one`/`fetch_many` — per-instrument, three concurrent calls
-   (`GetInstrumentInfo` + `GetClosingPriceInfo` + `GetETFByInsCode`) per
-   instrument, merged into one `RawCommodityPrice`. Field names here are
-   verified against the `tsetmc` package's typed `InstrumentInfo`/
-   `ClosingPriceInfo`/`ETF` TypedDicts — high confidence. This is the
-   default path `service.py` uses.
+1. `fetch_one`/`fetch_many` — per-instrument, four concurrent calls per
+   instrument, merged into one `RawCommodityPrice`:
+   - `GetInstrumentInfo` + `GetClosingPriceInfo` — mandatory; a failure
+     here fails the whole instrument. Field names verified against the
+     `tsetmc` package's typed `InstrumentInfo`/`ClosingPriceInfo`
+     TypedDicts — high confidence.
+   - `GetETFByInsCode` — best-effort; 404s for non-ETF instruments.
+   - `ClosingPrice/GetClosingPriceDailyList/{insCode}/{n}` — best-effort;
+     returns up to `n` days of real trading-day closing prices, used to
+     compute `change_percent_month`/`change_percent_year` live on every
+     fetch (no DB involved). Verified against 5j9/tsetmc==0.48.2's
+     source (`instruments.py::daily_closing_price`) — NOT the same as
+     `closingPriceInfo.thirtyDayClosingHistory`, which that same source
+     confirms is always null (a dead field, same pattern as
+     `InstrumentInfo.nav` — see schemas.py). This is the default path
+     `service.py` uses.
 
 2. `fetch_bulk_commodity_funds` — one HTTP call
    (`ClosingPrice/GetTradeTop/CommodityFund/{flow}/{top}`) returns every
@@ -40,7 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 import httpx
@@ -56,18 +66,65 @@ log = logging.getLogger("commodities.tsetmc")
 _FARSI_NORM = str.maketrans("يك", "یک")  # same normalization the reference package applies to `fa=True` responses
 
 
+def _yyyymmdd(d) -> int:
+    """Gregorian date -> TSETMC's dEven int format, e.g. 2026-07-15 -> 20260715."""
+    return int(d.strftime("%Y%m%d"))
+
+
+def _reference_price(history: List["_DailyClosingRecord"], target: int) -> Optional[float]:
+    """Closing price of the most recent trading day at or before `target`
+    (a dEven-format int) — i.e. "the last known price as of that date",
+    not an interpolation. Returns None if `history` has no record that old
+    (e.g. the instrument hasn't been trading that long, or the history
+    fetch degraded — see fetch_one), which the caller treats as "not
+    available" rather than an error."""
+    candidates = [r for r in history if r.dEven is not None and r.pClosing is not None and r.dEven <= target]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: r.dEven).pClosing
+
+
+def _pct_change(current: Optional[float], reference: Optional[float]) -> Optional[float]:
+    if current is None or not reference:
+        return None
+    return round((current - reference) / reference * 100, 4)
+
+
 # ---- Per-endpoint raw response models (verified field names) ----
+
+class _StaticThreshold(BaseModel):
+    """Daily allowed price band (دامنه نوسان روزانه) — the exchange-imposed
+    ceiling/floor for the day, distinct from priceMin/priceMax below which
+    are the *actual* traded high/low within that band."""
+    model_config = {"extra": "ignore"}
+    psGelStaMax: Optional[float] = None
+    psGelStaMin: Optional[float] = None
+
+
+class _InstrumentState(BaseModel):
+    """Live trading-status flag. cEtavalTitle is the Persian human-readable
+    status (e.g. "مجاز" = normal/allowed trading; other TSETMC values
+    include halted/suspended states) — worth surfacing since a UI showing
+    a price with no indication trading is halted is misleading."""
+    model_config = {"extra": "ignore"}
+    cEtaval: Optional[str] = None
+    cEtavalTitle: Optional[str] = None
+
 
 class _InstrumentInfo(BaseModel):
     model_config = {"extra": "ignore"}
     insCode: str
     lVal18: Optional[str] = None
+    lVal18AFC: Optional[str] = None  # Farsi/AFC-charset trading symbol, e.g. "نقران" — the symbol actually shown on tsetmc.com, vs. lVal18's Latin transliteration
     lVal30: Optional[str] = None
     nav: Optional[float] = None
     minWeek: Optional[float] = None
     maxWeek: Optional[float] = None
     minYear: Optional[float] = None
     maxYear: Optional[float] = None
+    qTotTran5JAvg: Optional[float] = None  # average daily traded volume over the last 5 sessions
+    etfIssuedUnit: Optional[float] = None  # total fund units outstanding
+    staticThreshold: Optional[_StaticThreshold] = None
 
 
 class _ClosingPriceInfo(BaseModel):
@@ -83,6 +140,7 @@ class _ClosingPriceInfo(BaseModel):
     qTotTran5J: Optional[float] = None
     qTotCap: Optional[float] = None
     zTotTran: Optional[float] = None
+    instrumentState: Optional[_InstrumentState] = None
 
 
 class _EtfInfo(BaseModel):
@@ -90,6 +148,20 @@ class _EtfInfo(BaseModel):
     insCode: str
     pRedTran: Optional[float] = None
     pSubTran: Optional[float] = None
+
+
+class _DailyClosingRecord(BaseModel):
+    """One row from ClosingPrice/GetClosingPriceDailyList — a REAL, working
+    historical-price endpoint (unlike closingPriceInfo.thirtyDayClosingHistory,
+    which the reference package's own docs confirm is always null, same dead-
+    field pattern as InstrumentInfo.nav). Verified against
+    5j9/tsetmc==0.48.2's instruments.py: `daily_closing_price()` calls
+    `ClosingPrice/GetClosingPriceDailyList/{insCode}/{n}` -> `j['closingPriceDaily']`,
+    a list of these. dEven is Gregorian YYYYMMDD (confirmed against the
+    instrument's own dEven/finalLastDate elsewhere in a live response)."""
+    model_config = {"extra": "ignore"}
+    dEven: Optional[int] = None
+    pClosing: Optional[float] = None
 
 
 class TsetmcClient(CommodityDataClient):
@@ -101,9 +173,13 @@ class TsetmcClient(CommodityDataClient):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0",
     }
 
-    def __init__(self, http: httpx.AsyncClient, max_concurrent: int = 8):
+    def __init__(self, http: httpx.AsyncClient, max_concurrent: int = 8, history_days: int = 290):
         self._http = http
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        # 290 trading-day records comfortably covers a calendar year even
+        # accounting for Iran's Thu/Fri weekend + holidays (~245 trading
+        # days/year in practice) — see _reference_price below.
+        self._history_days = history_days
 
     # ------------------------------------------------------------------ #
     # Per-instrument (verified, default path)
@@ -111,10 +187,9 @@ class TsetmcClient(CommodityDataClient):
     async def fetch_one(self, instrument: InstrumentRef) -> RawCommodityPrice:
         async with self._semaphore:
             try:
-                info_j, price_j, etf_j = await asyncio.gather(
+                info_j, price_j = await asyncio.gather(
                     self._get_json(f"Instrument/GetInstrumentInfo/{instrument.ins_code}", farsi=True),
                     self._get_json(f"ClosingPrice/GetClosingPriceInfo/{instrument.ins_code}", farsi=True),
-                    self._get_json(f"Fund/GetETFByInsCode/{instrument.ins_code}", farsi=False),
                 )
             except httpx.HTTPError as e:
                 raise TsetmcUnavailableError(f"tsetmc: request failed for {instrument.ins_code}: {e}") from e
@@ -125,29 +200,64 @@ class TsetmcClient(CommodityDataClient):
             except (ValidationError, KeyError) as e:
                 raise TsetmcUnavailableError(f"tsetmc: unexpected response shape for {instrument.ins_code}: {e}") from e
 
-            # ETF endpoint can legitimately 404/error for a non-ETF instrument
-            # or transient issues — degrade to missing redemption/subscription
-            # data rather than failing the whole instrument for it.
+            # ETF data and daily history are both "nice to have", fetched
+            # concurrently, each independently tolerant of failure:
+            # non-ETF instruments 404 on the ETF endpoint, and a freshly
+            # listed fund simply won't have a year of history yet. Neither
+            # failure should sink the whole instrument the way a failure
+            # of the two calls above does.
+            etf_result, history_result = await asyncio.gather(
+                self._get_json(f"Fund/GetETFByInsCode/{instrument.ins_code}", farsi=False),
+                self._get_json(f"ClosingPrice/GetClosingPriceDailyList/{instrument.ins_code}/{self._history_days}", farsi=False),
+                return_exceptions=True,
+            )
+
             etf: Optional[_EtfInfo] = None
-            try:
-                etf = _EtfInfo.model_validate(etf_j["etf"])
-            except (ValidationError, KeyError, TypeError):
-                pass
+            if not isinstance(etf_result, Exception):
+                try:
+                    etf = _EtfInfo.model_validate(etf_result["etf"])
+                except (ValidationError, KeyError, TypeError):
+                    pass
+
+            daily_history: List[_DailyClosingRecord] = []
+            if isinstance(history_result, Exception):
+                log.debug("tsetmc: daily history fetch failed for %s: %s", instrument.ins_code, history_result)
+            else:
+                try:
+                    daily_history = [_DailyClosingRecord.model_validate(r) for r in history_result["closingPriceDaily"]]
+                except (ValidationError, KeyError, TypeError):
+                    log.debug("tsetmc: daily history parse failed for %s", instrument.ins_code)
 
             change_percent = None
             if price.priceChange is not None and price.priceYesterday:
                 change_percent = round(price.priceChange / price.priceYesterday * 100, 4)
 
+            nav = None
+            if etf and etf.pRedTran is not None and etf.pSubTran is not None:
+                nav = round((etf.pRedTran + etf.pSubTran) / 2, 4)
+
+            today = datetime.now(timezone.utc).date()
+            month_ago_price = _reference_price(daily_history, _yyyymmdd(today - timedelta(days=30)))
+            year_ago_price = _reference_price(daily_history, _yyyymmdd(today - timedelta(days=365)))
+            change_percent_month = _pct_change(price.pClosing, month_ago_price)
+            change_percent_year = _pct_change(price.pClosing, year_ago_price)
+
             return RawCommodityPrice(
                 ins_code=instrument.ins_code, isin=instrument.isin, group=instrument.group,
-                short_name=info.lVal18, full_name=info.lVal30,
+                short_name=info.lVal18, symbol_fa=info.lVal18AFC, full_name=info.lVal30,
                 last_price=price.pDrCotVal, closing_price=price.pClosing,
                 previous_close=price.priceYesterday, open_price=price.priceFirst,
                 day_low=price.priceMin, day_high=price.priceMax,
                 change_amount=price.priceChange, change_percent=change_percent,
+                change_percent_month=change_percent_month, change_percent_year=change_percent_year,
                 volume=price.qTotTran5J, value=price.qTotCap, trade_count=price.zTotTran,
-                nav=info.nav, week_low=info.minWeek, week_high=info.maxWeek,
+                avg_volume_5d=info.qTotTran5JAvg,
+                nav=nav, week_low=info.minWeek, week_high=info.maxWeek,
                 year_low=info.minYear, year_high=info.maxYear,
+                units_issued=info.etfIssuedUnit,
+                trading_status=price.instrumentState.cEtavalTitle if price.instrumentState else None,
+                price_band_min=info.staticThreshold.psGelStaMin if info.staticThreshold else None,
+                price_band_max=info.staticThreshold.psGelStaMax if info.staticThreshold else None,
                 redemption_price=etf.pRedTran if etf else None,
                 subscription_price=etf.pSubTran if etf else None,
                 fetched_at=datetime.now(timezone.utc),
