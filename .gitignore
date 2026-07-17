@@ -11,3 +11,7 @@ venv/
 *.egg-info/
 app_shared.db-wal
 .idea/
+secret
+lotus_options.db
+lotus_portfolio.db
+app_shared.db
