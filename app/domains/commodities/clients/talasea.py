@@ -3,8 +3,31 @@ app/domains/commodities/clients/talasea.py
 ================================================
 UNVERIFIED — see clients/platform_base.py's module docstring.
 
-`api.talasea.ir/api/market/getGoldPrice` has no history/range params, so
-it's treated as a direct current-price endpoint (unlike hamrahgold/technogold).
+`api.talasea.ir/api/market/getGoldPrice` — returns a single price
+without separate buy/sell. Use the same price for both.
+Response format:
+{
+  "price": "18240",
+  "minOrderValue": 100000,
+  "minSellOrderValue": 100000,
+  "feeTable": [{"min": 0, "fee": 0.01}],
+  "totalOrder30dayValues": 0,
+  "minDeposit": 5000,
+  "maxDeposit": 400000000,
+  "maxOrderValue": 1000000000,
+  "fee": 0.01,
+  "percentageCreditLoan": 40,
+  "goldInstallmentPercent": 0.055,
+  "change24h": "0.02",
+  "disableBuyMessage": "",
+  "disableSellMessage": "",
+  "disableSell": false,
+  "disableBuy": false,
+  "disableMargin": false,
+  "disableMarginMessage": "",
+  "disableLimit": false,
+  "disableLimitMessage": ""
+}
 """
 from __future__ import annotations
 
@@ -12,7 +35,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.domains.commodities.clients.platform_base import GoldPricePlatformClient, find_number, require_parsed
+from app.domains.commodities.clients.platform_base import GoldPricePlatformClient
 from app.domains.commodities.exceptions import GoldPlatformUnavailableError
 from app.domains.commodities.schemas import RawGoldPlatformPrice
 
@@ -33,17 +56,20 @@ class TalaseaClient(GoldPricePlatformClient):
         except httpx.HTTPError as e:
             raise GoldPlatformUnavailableError(f"{self.name}: request failed: {e}") from e
 
-        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        # Direct access to price - simple flat structure
+        price = payload.get("price")
+        if price is None:
+            raise GoldPlatformUnavailableError(
+                f"{self.name}: missing 'price' in response: {payload}"
+            )
 
-        buy = find_number(data, ("buy",), ("buyPrice",), ("buy_price",), ("bid",))
-        sell = find_number(data, ("sell",), ("sellPrice",), ("sell_price",), ("ask",))
-        price = find_number(data, ("price",), ("value",), ("gold",))
-
-        fields = require_parsed(self.name, payload, buy=buy, sell=sell, price=price)
+        # Use the same price for both buy and sell since no spread is provided
+        price_val = float(price)
 
         return RawGoldPlatformPrice(
             platform=self.name,
-            buy_price=fields["buy"] if fields["buy"] is not None else fields["price"],
-            sell_price=fields["sell"] if fields["sell"] is not None else fields["price"],
+            buy_price=price_val,
+            sell_price=price_val,
             fetched_at=datetime.now(timezone.utc),
         )
+
